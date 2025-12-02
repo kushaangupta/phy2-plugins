@@ -125,7 +125,13 @@ class SplitByEvent(IPlugin):
                 spike_times = controller.model.spike_times[spike_ids]
 
                 # find file with flag "events" in the name in current directory
-                filename = [f for f in os.listdir() if "events" in f][0]
+                event_files = [f for f in os.listdir() if "events" in f]
+                if not event_files:
+                    logger.error("No events file found in current directory. Please ensure a file with 'events' in the name exists.")
+                    return
+                
+                filename = event_files[0]
+                logger.info(f"Using events file: {filename}")
 
                 data = sio.loadmat(filename, simplify_cells=True)
                 events = data[list(data.keys())[-1]]["timestamps"][:, 0]
