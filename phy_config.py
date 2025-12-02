@@ -18,7 +18,7 @@ c.TemplateGUI.plugins = [
     'GoodLabelsPlugin',
     'RawDataFilterPlugin',
     'SplitShortISI',
-    'Recluster',
+    'ReclusterKK',
     
     'StableMahalanobisDetection',
     'ReclusterUMAP',
@@ -26,4 +26,8 @@ c.TemplateGUI.plugins = [
 
     'SplitByEvent',
     'EventPsth',
+
+    'AutoQuality',
+    'CleanInBatch',
+    'colorSelectorPlugin',
 ]

@@ -30,7 +30,7 @@ try:
 except ImportError:  # pragma: no cover
     logger.warn("phy_config_dir not available.")
 
-class Recluster(IPlugin):
+class ReclusterKK(IPlugin):
     def attach_to_controller(self, controller):
         @connect
         #@controller.supervisor.connect
