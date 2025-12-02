@@ -8,6 +8,7 @@ import platform
 
 from pathlib import Path
 from subprocess import Popen
+import subprocess
 
 from phy.utils.tempdir import TemporaryDirectory
 from scipy.cluster.vq import kmeans2, whiten
@@ -75,11 +76,21 @@ class Recluster(IPlugin):
 
                 dtype = np.int64
                 factor = 2.**60
-                #dtype = np.int32
-                #factor = 2.**31
-                factor = factor/np.abs(fet2).max()
+                
+                # Check for invalid values
+                if np.any(np.isnan(fet2)) or np.any(np.isinf(fet2)):
+                    logger.error("Invalid values (NaN/Inf) detected in feature data")
+                    raise ValueError("Feature data contains NaN or Inf values")
+                
+                max_val = np.abs(fet2).max()
+                if max_val == 0:
+                    logger.error("All feature values are zero")
+                    raise ValueError("Feature data is all zeros")
+                    
+                factor = factor/max_val
                 fet2 = (fet2 * factor).astype(dtype)
-                # logger.warn(str(fet2[0,:]))
+                logger.info("Feature array shape: %s, dtype: %s, range: [%d, %d]", 
+                           fet2.shape, fet2.dtype, fet2.min(), fet2.max())
 
                 # Run KK2 in a temporary directory to avoid side effects.
                 # n = 10
@@ -98,13 +109,20 @@ class Recluster(IPlugin):
                 if platform.system() == 'Windows':
                     program = os.path.join(phy_config_dir(),'klustakwik.exe')
                 else:
-                    program = '~/klustakwik/KlustaKwik'
+                    program = os.path.expanduser('~/klustakwik/KlustaKwik')
                 cmd = [program, name, str(shank)]
-                cmd +=["-UseDistributional",'0',"-MaxPossibleClusters",'20',"-MinClusters",'20'] #,"-MinClusters",'2',"-MaxClusters",'12'   ,"-MaxClusters",'12',"-MaxClusters",'12'
+                # Set reasonable cluster bounds for the dataset size
+                cmd +=['-UseDistributional','0','-MaxPossibleClusters','20','-MinClusters','2','-MaxClusters','20']
 
-                # Run KlustaKwik
-                p = Popen(cmd)
-                p.wait()
+                # Run KlustaKwik and wait for completion
+                logger.info("Running command: %s", ' '.join(cmd))
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    logger.error("KlustaKwik failed with return code %d", result.returncode)
+                    logger.error("stdout: %s", result.stdout)
+                    logger.error("stderr: %s", result.stderr)
+                    raise RuntimeError("KlustaKwik execution failed")
+                logger.info("KlustaKwik completed successfully")
                 # Read back the clusters
                 spike_clusters = read_clusters(name + '.clu.' + str(shank))
                 controller.supervisor.actions.split(spike_ids, spike_clusters)
@@ -150,11 +168,21 @@ class Recluster(IPlugin):
 
                 dtype = np.int64
                 factor = 2.**60
-                #dtype = np.int32
-                #factor = 2.**31
-                factor = factor/np.abs(fet2).max()
+                
+                # Check for invalid values
+                if np.any(np.isnan(fet2)) or np.any(np.isinf(fet2)):
+                    logger.error("Invalid values (NaN/Inf) detected in feature data")
+                    raise ValueError("Feature data contains NaN or Inf values")
+                
+                max_val = np.abs(fet2).max()
+                if max_val == 0:
+                    logger.error("All feature values are zero")
+                    raise ValueError("Feature data is all zeros")
+                    
+                factor = factor/max_val
                 fet2 = (fet2 * factor).astype(dtype)
-                # logger.warn(str(fet2[0,:]))
+                logger.info("Feature array shape: %s, dtype: %s, range: [%d, %d]", 
+                           fet2.shape, fet2.dtype, fet2.min(), fet2.max())
 
                 # Run KK2 in a temporary directory to avoid side effects.
                 # n = 10
@@ -173,13 +201,19 @@ class Recluster(IPlugin):
                 if platform.system() == 'Windows':
                     program = os.path.join(phy_config_dir(),'klustakwik.exe')
                 else:
-                    program = '~/klustakwik/KlustaKwik'
+                    program = os.path.expanduser('~/klustakwik/KlustaKwik')
                 cmd = [program, name, str(shank)]
-                cmd +=["-UseDistributional",'0'] # ,"-MinClusters",'2',"-MaxClusters",'12'
+                cmd +=['-UseDistributional','0','-MinClusters','2','-MaxClusters','20']
 
-                # Run KlustaKwik.
-                p = Popen(cmd)
-                p.wait()
+                # Run KlustaKwik and wait for completion
+                logger.info("Running command: %s", ' '.join(cmd))
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    logger.error("KlustaKwik failed with return code %d", result.returncode)
+                    logger.error("stdout: %s", result.stdout)
+                    logger.error("stderr: %s", result.stderr)
+                    raise RuntimeError("KlustaKwik execution failed")
+                logger.info("KlustaKwik completed successfully")
                 # Read back the clusters
                 spike_clusters = read_clusters(name + '.clu.' + str(shank))
                 controller.supervisor.actions.split(spike_ids, spike_clusters)
