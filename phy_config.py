@@ -22,5 +22,8 @@ c.TemplateGUI.plugins = [
     
     'StableMahalanobisDetection',
     'ReclusterUMAP',
-    'ImprovedISIAnalysis'
+    'ImprovedISIAnalysis',
+
+    'SplitByEvent',
+    'EventPsth',
 ]
