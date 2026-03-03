@@ -10,7 +10,8 @@ from pathlib import Path
 from subprocess import Popen
 import subprocess
 
-from scipy.cluster.vq import kmeans2, whiten
+from scipy.cluster.vq import whiten
+from sklearn.cluster import KMeans
 
 #logger = logging.getLogger(__name__)
 logger = logging.getLogger('phy')
@@ -236,9 +237,12 @@ class ReclusterKK(IPlugin):
                 data3 = data.data[spike_ids]
                 data2 = np.reshape(data3,(data3.shape[0],data3.shape[1]*data3.shape[2]))
                 whitened = whiten(data2)
-                clusters_out,label = kmeans2(whitened,kmeanclusters)
-                controller.supervisor.actions.split(s,label)
+                kmeans = KMeans(n_clusters=kmeanclusters, init='k-means++', n_init=10)  # robust than scipy.cluster.vq.kmeans2
+                kmeans.fit(whitened)
+                label = kmeans.labels_
+                controller.supervisor.actions.split(s, label)
                 logger.warn("K means clustering complete")
+                clusters_out = kmeans.cluster_centers_  # centroid coordinates
 
             #@controller.supervisor.actions.add(shortcut='alt+x')
             @controller.supervisor.actions.add(shortcut='alt+shift+x', prompt=True, prompt_default=lambda: 14)
