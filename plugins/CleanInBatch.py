@@ -258,7 +258,7 @@ class CleanInBatch(IPlugin):
                 except Exception as e:
                     logger.error(f"Error in batch short ISI: {str(e)}")
 
-            @controller.supervisor.actions.add(shortcut='shift+alt+k')
+            @controller.supervisor.actions.add(shortcut='alt+shift+r')
             def Batch_KlustaKwik():
                 """Run KlustaKwik reclustering on all 'review' clusters in batch.
                 
