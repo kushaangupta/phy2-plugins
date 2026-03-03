@@ -10,7 +10,6 @@ from pathlib import Path
 from subprocess import Popen
 import subprocess
 
-from phy.utils.tempdir import TemporaryDirectory
 from scipy.cluster.vq import kmeans2, whiten
 
 #logger = logging.getLogger(__name__)

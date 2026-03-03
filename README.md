@@ -26,7 +26,6 @@ pip install pandas numpy scipy scikit-learn umap-learn
    - If the `plugins` folder doesn't exist, you will need to create it.
 2. Copy other supporting files (e.g., `phy_config.py`, `klustakwik.exe` if used) from the root of this repository to your Phy user configuration directory (e.g., `~/.phy/` or `C:\Users\<YourUserName>\.phy`).
 3. Install dependencies (see [Dependencies](#dependencies) section above).
-4. Copy 'tempdir.py' (from the `plugins` directory of this repository) to `*YourPhyDirectory*/phy/utils`.
 
 ## Authors
 - Original Phy1: Peter Petersen
