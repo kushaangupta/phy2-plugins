@@ -25,6 +25,13 @@ pip install pandas numpy scipy scikit-learn umap-learn
    - On Windows, this is typically `C:\Users\<YourUserName>\.phy\plugins`.
    - If the `plugins` folder doesn't exist, you will need to create it.
 2. Copy other supporting files (e.g., `phy_config.py`, `klustakwik.exe` if used) from the root of this repository to your Phy user configuration directory (e.g., `~/.phy/` or `C:\Users\<YourUserName>\.phy`).
+   - For Linux/Mac, build the `KlustaKwik` binary from the source code provided in this repository and place it in the Phy user configuration directory.
+      ```bash
+      unzip klustakwik.zip
+      cd klustakwik
+      make clean
+      make
+      ```
 3. Install dependencies (see [Dependencies](#dependencies) section above).
 
 ## Authors
