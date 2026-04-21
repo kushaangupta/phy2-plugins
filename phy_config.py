@@ -20,6 +20,7 @@ c.TemplateGUI.plugins = [
     'SplitShortISI',
     'ReclusterKK',
     'ClusterKK2',
+    'SpikeEditSimilarityPlugin',
 
     'StableMahalanobisDetection',
     'ReclusterUMAP',
