@@ -18,6 +18,7 @@ These plugins add additional features to Phy2. Originally created for Phy1 by Pe
 ## Dependencies
 ```bash
 pip install pandas numpy scipy scikit-learn umap-learn
+pip install --no-build-isolation klustakwik2
 ```
 
 ## Installation

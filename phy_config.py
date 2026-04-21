@@ -19,7 +19,8 @@ c.TemplateGUI.plugins = [
     'RawDataFilterPlugin',
     'SplitShortISI',
     'ReclusterKK',
-    
+    'ClusterKK2',
+
     'StableMahalanobisDetection',
     'ReclusterUMAP',
     'ImprovedISIAnalysis',
