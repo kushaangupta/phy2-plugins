@@ -21,6 +21,7 @@ c.TemplateGUI.plugins = [
     'ReclusterKK',
     'ClusterKK2',
     'SpikeEditSimilarityPlugin',
+    'DeduplicateKeepBest',
 
     'StableMahalanobisDetection',
     'ReclusterUMAP',
