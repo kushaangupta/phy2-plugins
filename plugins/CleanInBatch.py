@@ -10,7 +10,8 @@ Shortcuts:
 from phy import IPlugin, connect
 import numpy as np
 import logging
-from scipy.cluster.vq import kmeans2, whiten
+from scipy.cluster.vq import whiten
+from sklearn.cluster import KMeans
 import os
 import platform
 from subprocess import Popen
@@ -180,8 +181,11 @@ class CleanInBatch(IPlugin):
                         
                         # Whiten and cluster
                         whitened = whiten(data2)
-                        clusters_out, label = kmeans2(whitened, n_clusters)
-                        
+                        kmeans = KMeans(n_clusters=n_clusters, init='k-means++', n_init=10)  # robust than scipy.cluster.vq.kmeans2
+                        kmeans.fit(whitened)
+                        label = kmeans.labels_
+                        clusters_out = kmeans.cluster_centers_  # centroid coordinates
+
                         # Split the cluster
                         controller.supervisor.actions.split(spike_ids, label)
                         logger.info(f"K-means split cluster {cid} into {n_clusters} groups")
@@ -258,7 +262,7 @@ class CleanInBatch(IPlugin):
                 except Exception as e:
                     logger.error(f"Error in batch short ISI: {str(e)}")
 
-            @controller.supervisor.actions.add(shortcut='alt+shift+r')
+            @controller.supervisor.actions.add(shortcut='alt+shift+ctrl+r')
             def Batch_KlustaKwik():
                 """Run KlustaKwik reclustering on all 'review' clusters in batch.
                 
