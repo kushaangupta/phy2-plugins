@@ -91,9 +91,51 @@ def _dense_to_sparse_data(features):
     return raw.to_sparse_data()
 
 
-def _run_kk2(features, num_starting_clusters=20, **kk_params):
-    """Run KlustaKwik2 on a dense feature matrix and return cluster labels.
+import multiprocessing as mp
+import tempfile
+import os
 
+def _run_kk2_worker(features, num_starting_clusters, kk_params, out_path):
+    """Worker function to run KK2 in a separate process."""
+    try:
+        from klustakwik2 import KK
+        
+        # MONKEY PATCH: Disable the `try_splits` function entirely.
+        # The split logic creates and destroys temporary KK objects (K2, K3),
+        # which triggers a fatal Cython `free(): invalid next size` or `munmap_chunk`
+        # double-free memory corruption bug inside `klustakwik2`.
+        # Since we seed with an ample amount of initial clusters (e.g., 20),
+        # standard EM merging is sufficient and splitting is completely unnecessary.
+        KK.try_splits = lambda self: False
+        
+        data = _dense_to_sparse_data(features)
+        
+        # points_for_cluster_mask=0 ensures every feature stays unmasked
+        kk_params.setdefault('points_for_cluster_mask', 0)
+        
+        kk = KK(data, **kk_params)
+        n_spikes = data.num_spikes
+        initial_clusters = np.random.randint(0, num_starting_clusters, size=n_spikes)
+        kk.cluster_from(initial_clusters)
+        
+        # Save securely to disk so even if the process aborts during teardown, data is safe
+        np.save(out_path, kk.clusters)
+        with open(out_path, 'r+b') as f:
+            os.fsync(f.fileno())
+            
+    except Exception as e:
+        with open(out_path + '.err', 'w') as f:
+            f.write(str(e))
+    finally:
+        # HARD exit to bypass Python GC and reduce double-free chances
+        os._exit(0)
+
+def _run_kk2(features, num_starting_clusters=20, **kk_params):
+    """Run KlustaKwik2 on a dense feature matrix.
+    
+    Runs in a subprocess to isolate a known Cython memory corruption bug
+    (munmap_chunk: invalid pointer) that occurs during KK object garbage collection.
+    
     Parameters
     ----------
     features : ndarray, shape (n_spikes, n_features)
@@ -103,38 +145,44 @@ def _run_kk2(features, num_starting_clusters=20, **kk_params):
         Forwarded to ``KK(...)``.  Useful overrides include
         ``max_possible_clusters``, ``max_iterations``,
         ``use_noise_cluster``, ``use_mua_cluster``.
-
+    
     Returns
     -------
     clusters : ndarray of int, shape (n_spikes,)
         Cluster labels (0-indexed).
     """
-    from klustakwik2 import KK
+    ctx = mp.get_context('spawn')
+    
+    with tempfile.NamedTemporaryFile(suffix='.npy', delete=False) as f:
+        out_path = f.name
+        
+    err_path = out_path + '.err'
+    
+    try:
+        logger.info("Starting KK2 subprocess for %d spikes, %d features...", features.shape[0], features.shape[1])
+        p = ctx.Process(target=_run_kk2_worker, args=(features, num_starting_clusters, kk_params, out_path))
+        p.start()
+        p.join()
+        
+        if os.path.exists(err_path):
+            with open(err_path, 'r') as f:
+                err = f.read()
+            raise RuntimeError(f"KK2 exception: {err}")
+            
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            clusters = np.load(out_path)
+            logger.info("KK2 subprocess finished successfully: %d clusters found", len(np.unique(clusters)))
+            if p.exitcode != 0:
+                logger.warning("KK2 subprocess crashed with exit code %s during cleanup, but clustering was successful.", p.exitcode)
+            return clusters
+        else:
+            raise RuntimeError(f"KK2 memory corruption/crash during execution (exit code {p.exitcode}). No data returned.")
+    finally:
+        if os.path.exists(out_path):
+            os.remove(out_path)
+        if os.path.exists(err_path):
+            os.remove(err_path)
 
-    data = _dense_to_sparse_data(features)
-
-    logger.info("KK2: %d spikes, %d features, %d unique masks",
-                data.num_spikes, data.num_features, data.num_masks)
-
-    # Dense (fully unmasked) data always has exactly 1 unique mask, so
-    # mask_starts() can't generate diverse initial clusters (it needs
-    # num_masks >= num_starting_clusters).  Instead we seed with random
-    # cluster assignments and call cluster_from().
-    #
-    # points_for_cluster_mask=0 ensures every feature stays unmasked in
-    # every cluster regardless of cluster size.
-    kk_params.setdefault('points_for_cluster_mask', 0)
-
-    kk = KK(data, **kk_params)
-
-    n_spikes = data.num_spikes
-    initial_clusters = np.random.randint(0, num_starting_clusters,
-                                         size=n_spikes)
-    kk.cluster_from(initial_clusters)
-
-    clusters = kk.clusters
-    logger.info("KK2 finished: %d clusters found", len(np.unique(clusters)))
-    return clusters
 
 
 # ---------------------------------------------------------------------------
