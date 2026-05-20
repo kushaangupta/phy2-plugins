@@ -33,4 +33,5 @@ c.TemplateGUI.plugins = [
     'AutoQuality',
     'CleanInBatch',
     'colorSelectorPlugin',
+    'ChannelContextPlugin',
 ]
