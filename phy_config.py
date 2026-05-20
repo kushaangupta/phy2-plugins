@@ -37,4 +37,5 @@ c.TemplateGUI.plugins = [
     'RawWaveformMode',
     'ChannelContextPlugin',
     'SwapClusterSimilarPlugin',
+    'TemplateMatchSplit',
 ]
