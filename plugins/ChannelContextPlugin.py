@@ -56,6 +56,14 @@ replace WaveformView's stored mean/template callbacks with uncached versions.
 That is why the plugin explicitly refreshes WaveformView's waveform function
 table after every channel-context edit.
 
+Compatibility with similarity plugins
+-------------------------------------
+The effective channel list is exposed on the controller as
+``_channel_context_get_best_channels(cluster_id)`` and every context edit bumps
+``_channel_context_revision``. Other plugins can include that revision in their
+cache keys so channel-dependent results, such as waveform similarity, update
+when context channels are toggled.
+
 Splits and merges
 -----------------
 When a cluster with channel-context edits is split, the new child clusters
@@ -121,10 +129,17 @@ class ChannelContextPlugin(IPlugin):
             controller, "_get_amplitude_functions", None
         )
         self._context_path = controller.dir_path / "channel_context_best_channels.json"
+        self._context_revision = 0
+        controller._channel_context_revision = self._context_revision
+
+        def _bump_context_revision():
+            self._context_revision += 1
+            controller._channel_context_revision = self._context_revision
 
         def _load_saved_context():
             if not self._context_path.exists():
                 return
+            changed = False
             try:
                 with open(str(self._context_path), "r") as f:
                     payload = json.load(f)
@@ -158,8 +173,12 @@ class ChannelContextPlugin(IPlugin):
                         removed.add(ch)
                 if added:
                     self._added_by_cluster[cluster_id] = added
+                    changed = True
                 if removed:
                     self._removed_by_cluster[cluster_id] = removed
+                    changed = True
+            if changed:
+                _bump_context_revision()
             logger.info(
                 "ChannelContextPlugin: loaded channel context from %s.",
                 self._context_path,
@@ -326,6 +345,7 @@ class ChannelContextPlugin(IPlugin):
                 self._added_by_cluster.pop(int(cluster_id), None)
             if not removed:
                 self._removed_by_cluster.pop(int(cluster_id), None)
+            _bump_context_revision()
 
         def _normalized_template_amplitudes(cluster_id, channel_ids):
             if not hasattr(controller, "get_template_for_cluster"):
@@ -634,6 +654,7 @@ class ChannelContextPlugin(IPlugin):
             )
 
         controller.get_best_channels = get_best_channels
+        controller._channel_context_get_best_channels = get_best_channels
         if self._original_get_channel_amplitudes is not None:
             controller.get_channel_amplitudes = get_channel_amplitudes
         controller._get_waveforms = get_waveforms
@@ -690,6 +711,15 @@ class ChannelContextPlugin(IPlugin):
                             clear(warn=False)
                         except TypeError:
                             clear()
+                clear_similarity = getattr(controller, "_clear_custom_similarity", None)
+                if callable(clear_similarity):
+                    try:
+                        clear_similarity()
+                    except Exception as exc:
+                        logger.debug(
+                            "ChannelContextPlugin: similarity cache clear failed: %s",
+                            exc,
+                        )
 
             def _refresh_waveform_view_functions(view):
                 current = view.waveforms_type
@@ -798,6 +828,7 @@ class ChannelContextPlugin(IPlugin):
             @connect(sender=supervisor)
             def on_cluster(sender, up):
                 if _apply_cluster_update(up):
+                    _bump_context_revision()
                     logger.info(
                         "ChannelContextPlugin: inherited channel context for clusters %s.",
                         getattr(up, "added", []),
@@ -849,8 +880,11 @@ class ChannelContextPlugin(IPlugin):
             @supervisor.actions.add(shortcut="ctrl+shift+c")
             def reset_toggled_channels():
                 """Reset all channel context edits."""
+                had_context = bool(self._added_by_cluster or self._removed_by_cluster)
                 self._added_by_cluster.clear()
                 self._removed_by_cluster.clear()
+                if had_context:
+                    _bump_context_revision()
                 logger.info("ChannelContextPlugin: reset all channel context edits.")
                 _force_update()
 

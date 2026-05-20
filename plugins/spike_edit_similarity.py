@@ -14,13 +14,12 @@ Key behaviors (what this plugin does)
 - By default the plugin computes a cosine-like similarity between clusters using
     the mean waveform extracted from up to 1000 spikes per cluster (stable
     random sampling when clusters are large).
-- The default similarity function applies an asymmetrical channel-overlap
-    penalty: after computing similarity across the channels common to both
-    clusters, the score is multiplied by n_common / n_target where ``n_target``
-    is the number of "best" channels for the cluster you requested similarity
-    for. The intuition: when comparing cluster A against cluster B we downweight
-    similarities that come from only a tiny fraction of A's channels so a small
-    spatial overlap cannot claim high similarity.
+- The default similarity function applies a channel-overlap penalty: after
+    computing similarity across the channels common to both clusters, the score
+    is multiplied by ``n_common / n_union`` where ``n_union`` is the total number
+    of unique channels involved across both clusters. The intuition: when two
+    clusters only overlap on a tiny fraction of their combined channel support,
+    a high shared-channel cosine should be downweighted.
 - An alternate, unpenalized variant is provided (no channel-overlap penalty).
     You can compute it via the dedicated shortcut (see Shortcuts below) or by
     calling the exposed function on the controller.
@@ -33,20 +32,15 @@ Imagine cluster A has 8 best channels and cluster B has 8 best channels but
 they only share 1 — the waveform on that single channel might match perfectly
 and produce a cosine near 1.0 on the shared subset, but that match is
 misleading because the other channels (where A is strong and B is weak) were
-ignored. Penalizing by n_common / n_target reduces such false-high scores so
-similarity reflects similarity across the target's full footprint, not just the
-intersection.
+ignored. Penalizing by common / union channels reduces such false-high scores
+so similarity reflects the overlap of the two clusters' full channel support.
 
-Why asymmetric (n_common / n_target) instead of symmetric or Jaccard?
+Why common / union channels?
 ------------------------------------------------------------------
-This implementation penalizes relative to the "target" cluster (the cluster
-you requested similarity for). That makes the comparison directional and is
-often useful in workflows where the user inspects one cluster (target) and
-wants to know which other clusters are similar to it. A symmetric option
-(e.g. Jaccard: n_common / (n_target + n_other - n_common)) can be implemented
-easily and was considered; for simplicity and to match the common UX where
-you rank other clusters relative to a picked target, we penalize relative to
-the target's footprint.
+This implementation uses a symmetric Jaccard-style overlap factor:
+``n_common / (n_target + n_other - n_common)``. That matches the idea of
+penalizing by the fraction of common channels out of all channels involved in
+the two clusters combined.
 
 Shortcuts (default)
 --------------------
@@ -79,7 +73,10 @@ Implementation notes (for power users / developers)
     similarity is simply a dot product (fast cosine-like measure).
 - Caching: cluster templates are stored in ``cluster_template_cache`` (dict)
     and both similarity functions are wrapped with ``functools.lru_cache``
-    (size 1024). Clearing functions call ``cache_clear`` and clear the dict.
+    (size 1024). If ``ChannelContextPlugin`` is active, its revision token is
+    included in the similarity cache key so added/removed context channels are
+    reflected without restarting Phy. Clearing functions call ``cache_clear``
+    and clear the dict.
 - Error-handling: the plugin is defensive and tolerates missing model/supervisor
     attributes; failures to extract waveforms for a cluster quietly skip that
     pair so it won't crash the GUI.
@@ -176,6 +173,20 @@ class SpikeEditSimilarityPlugin(IPlugin):
 
                 cluster_template_cache = {}
 
+                def get_channel_context_revision():
+                    try:
+                        return int(getattr(ctrl, "_channel_context_revision", 0))
+                    except Exception:
+                        return 0
+
+                def get_effective_channels(cluster_id):
+                    channel_getter = getattr(
+                        ctrl, "_channel_context_get_best_channels", None
+                    )
+                    if not callable(channel_getter):
+                        channel_getter = ctrl.get_best_channels
+                    return np.asarray(channel_getter(cluster_id), dtype=np.int64)
+
                 def get_cluster_template_on_channels(cluster_id, channel_ids):
                     supervisor = getattr(ctrl, "supervisor", None)
                     if supervisor is None:
@@ -233,7 +244,9 @@ class SpikeEditSimilarityPlugin(IPlugin):
                         return None
 
                 @functools.lru_cache(maxsize=1024)
-                def custom_similarity_penalized(cluster_id):
+                def _custom_similarity_penalized_cached(
+                    cluster_id, channel_context_revision
+                ):
                     supervisor = getattr(ctrl, "supervisor", None)
                     if supervisor is None:
                         return []
@@ -242,7 +255,7 @@ class SpikeEditSimilarityPlugin(IPlugin):
                         return []
 
                     try:
-                        target_ch = ctrl.get_best_channels(cluster_id)
+                        target_ch = get_effective_channels(cluster_id)
                     except Exception:
                         return []
 
@@ -252,7 +265,7 @@ class SpikeEditSimilarityPlugin(IPlugin):
                             continue
 
                         try:
-                            other_ch = ctrl.get_best_channels(other_id)
+                            other_ch = get_effective_channels(other_id)
                         except Exception:
                             continue
 
@@ -274,22 +287,33 @@ class SpikeEditSimilarityPlugin(IPlugin):
 
                         sim = float(np.sum(target_t * other_t))
 
-                        # Penalize partial channel overlap: treat the similarity
-                        # as a mean across all target channels, with non-overlapping
-                        # channels contributing zero.  e.g. if the target has 8 best
-                        # channels but only 1 is common, multiply by 1/8.
+                        # Penalize partial channel overlap using common / union
+                        # channels (Jaccard-style overlap).
                         n_target = len(target_ch)
                         n_common = len(common_ch)
-                        if n_target > 0 and n_common < n_target:
-                            sim *= n_common / n_target
+                        n_other = len(other_ch)
+                        n_union = n_target + n_other - n_common
+                        if n_union > 0 and n_common < n_union:
+                            sim *= n_common / n_union
 
                         similarities.append((other_id, sim))
 
                     similarities.sort(key=lambda x: x[1], reverse=True)
                     return similarities
 
+                def custom_similarity_penalized(cluster_id):
+                    return _custom_similarity_penalized_cached(
+                        int(cluster_id), get_channel_context_revision()
+                    )
+
+                custom_similarity_penalized.cache_clear = (
+                    _custom_similarity_penalized_cached.cache_clear
+                )
+
                 @functools.lru_cache(maxsize=1024)
-                def custom_similarity_unpenalized(cluster_id):
+                def _custom_similarity_unpenalized_cached(
+                    cluster_id, channel_context_revision
+                ):
                     supervisor = getattr(ctrl, "supervisor", None)
                     if supervisor is None:
                         return []
@@ -298,7 +322,7 @@ class SpikeEditSimilarityPlugin(IPlugin):
                         return []
 
                     try:
-                        target_ch = ctrl.get_best_channels(cluster_id)
+                        target_ch = get_effective_channels(cluster_id)
                     except Exception:
                         return []
 
@@ -308,7 +332,7 @@ class SpikeEditSimilarityPlugin(IPlugin):
                             continue
 
                         try:
-                            other_ch = ctrl.get_best_channels(other_id)
+                            other_ch = get_effective_channels(other_id)
                         except Exception:
                             continue
 
@@ -335,6 +359,15 @@ class SpikeEditSimilarityPlugin(IPlugin):
 
                     similarities.sort(key=lambda x: x[1], reverse=True)
                     return similarities
+
+                def custom_similarity_unpenalized(cluster_id):
+                    return _custom_similarity_unpenalized_cached(
+                        int(cluster_id), get_channel_context_revision()
+                    )
+
+                custom_similarity_unpenalized.cache_clear = (
+                    _custom_similarity_unpenalized_cached.cache_clear
+                )
 
                 def clear_numpy_cache():
                     cluster_template_cache.clear()
@@ -620,8 +653,16 @@ class SpikeEditSimilarityPlugin(IPlugin):
                     msg(
                         f"True waveform similarity computed for cluster {target_cluster_id}"
                     )
+                except Exception as exc:
+                    import traceback
+
+                    msg(f"Fatal error in NumPy similarity: {exc}")
+                    logger.error(
+                        "NumPy similarity refresh fatal error:\n%s",
+                        traceback.format_exc(),
+                    )
             
-            @supervisor.actions.add(shortcut="ctrl+alt+shift+n")
+            @supervisor.actions.add(shortcut="alt+shift+ctrl+n")
             def recompute_numpy_similarity_unpenalized_now():
                 """Recompute NumPy similarity without channel-overlap penalty."""
 
@@ -685,13 +726,5 @@ class SpikeEditSimilarityPlugin(IPlugin):
                     msg(f"Fatal error in NumPy similarity (no penalty): {exc}")
                     logger.error(
                         "NumPy similarity (no penalty) refresh fatal error:\n%s",
-                        traceback.format_exc(),
-                    )
-                except Exception as exc:
-                    import traceback
-
-                    msg(f"Fatal error in NumPy similarity: {exc}")
-                    logger.error(
-                        "NumPy similarity refresh fatal error:\n%s",
                         traceback.format_exc(),
                     )
