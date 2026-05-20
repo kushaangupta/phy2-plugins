@@ -1,33 +1,122 @@
 """Phy plugin: Dynamic True Waveform Similarity
 
-This plugin provides an alternative to Kilosort's default similarity scores.
-Kilosort's default similarities are static: they are based strictly on the original
-Kilosort templates and do not update when you manually split a cluster. (For example,
-splitting a cluster will result in the two halves having a 1.0 similarity forever
-because they share the same Kilosort template).
+Overview
+--------
+This plugin provides a dynamic NumPy-based similarity calculator as an
+alternative to Kilosort's static template similarities. The goal is to compute
+cosine-style similarity using the actual waveforms extracted from the binary
+for the cluster(s) you are inspecting. Because this extracts spikes from disk
+on demand, the similarity values reflect the current, possibly edited clusters
+you see in the GUI rather than the frozen templates Kilosort produced.
 
-This plugin allows you to toggle on a custom, dynamic NumPy similarity calculator
-that extracts raw spikes from the binary on-the-fly, calculates the true mean
-waveform of your newly split clusters, and computes accurate cosine similarities.
-This allows you to quantitatively validate whether your manual splits actually
-separated distinct waveforms.
+Key behaviors (what this plugin does)
+-------------------------------------
+- By default the plugin computes a cosine-like similarity between clusters using
+    the mean waveform extracted from up to 1000 spikes per cluster (stable
+    random sampling when clusters are large).
+- The default similarity function applies an asymmetrical channel-overlap
+    penalty: after computing similarity across the channels common to both
+    clusters, the score is multiplied by n_common / n_target where ``n_target``
+    is the number of "best" channels for the cluster you requested similarity
+    for. The intuition: when comparing cluster A against cluster B we downweight
+    similarities that come from only a tiny fraction of A's channels so a small
+    spatial overlap cannot claim high similarity.
+- An alternate, unpenalized variant is provided (no channel-overlap penalty).
+    You can compute it via the dedicated shortcut (see Shortcuts below) or by
+    calling the exposed function on the controller.
 
-Note: Because this dynamically extracts spikes from the large binary file, it is an
-in-memory calculation that resets when Phy is closed. It does not overwrite the
-static `similar_templates.npy` file on disk.
+Why a channel-overlap penalty?
+-------------------------------
+Naive users can be surprised by high similarity values when two clusters only
+share a single channel even though their overall spatial footprints differ.
+Imagine cluster A has 8 best channels and cluster B has 8 best channels but
+they only share 1 — the waveform on that single channel might match perfectly
+and produce a cosine near 1.0 on the shared subset, but that match is
+misleading because the other channels (where A is strong and B is weak) were
+ignored. Penalizing by n_common / n_target reduces such false-high scores so
+similarity reflects similarity across the target's full footprint, not just the
+intersection.
 
-Shortcuts
----------
-Alt+Shift+N : Activate True Waveform Similarity (NumPy)
-    Switches the similarity view to use the custom dynamic math. It extracts up
-    to 1000 raw waveforms for the currently selected cluster, calculates its true
-    mean shape, and computes cosine similarity against all other clusters.
-    Once activated, this custom math will persist and update as you click around
-    different clusters.
+Why asymmetric (n_common / n_target) instead of symmetric or Jaccard?
+------------------------------------------------------------------
+This implementation penalizes relative to the "target" cluster (the cluster
+you requested similarity for). That makes the comparison directional and is
+often useful in workflows where the user inspects one cluster (target) and
+wants to know which other clusters are similar to it. A symmetric option
+(e.g. Jaccard: n_common / (n_target + n_other - n_common)) can be implemented
+easily and was considered; for simplicity and to match the common UX where
+you rank other clusters relative to a picked target, we penalize relative to
+the target's footprint.
 
-Alt+Shift+R : Restore Default Similarity (Kilosort)
-    Restores the original static Kilosort similarity math and clears the custom
-    waveform cache. Use this to revert the GUI back to default behavior.
+Shortcuts (default)
+--------------------
+- Alt+Shift+N : Compute NumPy similarity (DEFAULT — penalizes for partial
+    channel overlap). This becomes the active similarity used by the similarity
+    view while it's set on the controller.
+- Ctrl+Alt+Shift+N : Compute NumPy similarity without any channel-overlap
+    penalty (unpenalized variant). Use this when you want to compare raw
+    cosine-like similarity restricted to the common channels only.
+- Alt+Shift+R : Restore original Kilosort similarity and clear the plugin's
+    in-memory waveform cache.
+
+Exposed API on the controller
+-----------------------------
+- ``controller._numpy_similarity``
+        The default, penalized similarity function (callable(cluster_id) -> list
+        of (other_id, score) sorted descending).
+- ``controller._numpy_similarity_unpenalized``
+        The unpenalized similarity variant (same signature).
+- ``controller._clear_custom_similarity()``
+        Clears in-memory waveform templates and the LRU caches for both
+        similarity variants.
+
+Implementation notes (for power users / developers)
+---------------------------------------------------
+- Waveform extraction: up to ``n_spikes_to_extract = 1000`` spikes are
+    sampled per cluster; if a cluster is larger we sample deterministically
+    using a RandomState seeded by the cluster id so repeated runs are stable.
+- Normalization: mean waveform is L2-normalized and flattened so the
+    similarity is simply a dot product (fast cosine-like measure).
+- Caching: cluster templates are stored in ``cluster_template_cache`` (dict)
+    and both similarity functions are wrapped with ``functools.lru_cache``
+    (size 1024). Clearing functions call ``cache_clear`` and clear the dict.
+- Error-handling: the plugin is defensive and tolerates missing model/supervisor
+    attributes; failures to extract waveforms for a cluster quietly skip that
+    pair so it won't crash the GUI.
+
+Performance & practical tips
+----------------------------
+- Extracting waveforms from disk is the slowest part. For large datasets you
+    may notice a delay the first time a cluster is processed; subsequent calls
+    are much faster due to caching.
+- If you need faster but noisier results, reduce ``n_spikes_to_extract``.
+- If you prefer a symmetric overlap penalty (Jaccard) change the penalty to
+    ``n_common / (n_target + n_other - n_common)`` in the penalized function.
+
+How to change behavior
+----------------------
+- To make the unpenalized variant the default, set
+    ``controller._numpy_similarity = controller._numpy_similarity_unpenalized``
+    (done programmatically or manually in a small patch).
+- To change shortcuts, edit the two ``@supervisor.actions.add(shortcut=...)``
+    decorators near the bottom of this file.
+
+Examples (naive-user friendly)
+-----------------------------
+- You pick cluster A in the GUI and press Alt+Shift+N: the similarity panel
+    now shows other clusters ranked by how similar they are to A, but the
+    ranking is reduced for clusters that only overlap A on a small number of
+    channels.
+- If you want to see the raw, unpenalized cosine-like similarity restricted
+    to the shared channels (for debugging or exploratory analysis), press
+    Ctrl+Alt+Shift+N instead.
+
+Notes and history
+-----------------
+This file was extended to provide both a penalized default (safer for most
+manual curation workflows) and an explicit unpenalized alternative after
+discussion in the development chat. The short explanation and reasoning above
+is intended to help new users choose the behavior that fits their needs.
 """
 
 from __future__ import annotations
@@ -144,7 +233,7 @@ class SpikeEditSimilarityPlugin(IPlugin):
                         return None
 
                 @functools.lru_cache(maxsize=1024)
-                def custom_similarity(cluster_id):
+                def custom_similarity_penalized(cluster_id):
                     supervisor = getattr(ctrl, "supervisor", None)
                     if supervisor is None:
                         return []
@@ -184,6 +273,64 @@ class SpikeEditSimilarityPlugin(IPlugin):
                             continue
 
                         sim = float(np.sum(target_t * other_t))
+
+                        # Penalize partial channel overlap: treat the similarity
+                        # as a mean across all target channels, with non-overlapping
+                        # channels contributing zero.  e.g. if the target has 8 best
+                        # channels but only 1 is common, multiply by 1/8.
+                        n_target = len(target_ch)
+                        n_common = len(common_ch)
+                        if n_target > 0 and n_common < n_target:
+                            sim *= n_common / n_target
+
+                        similarities.append((other_id, sim))
+
+                    similarities.sort(key=lambda x: x[1], reverse=True)
+                    return similarities
+
+                @functools.lru_cache(maxsize=1024)
+                def custom_similarity_unpenalized(cluster_id):
+                    supervisor = getattr(ctrl, "supervisor", None)
+                    if supervisor is None:
+                        return []
+                    clustering = getattr(supervisor, "clustering", None)
+                    if clustering is None:
+                        return []
+
+                    try:
+                        target_ch = ctrl.get_best_channels(cluster_id)
+                    except Exception:
+                        return []
+
+                    similarities = []
+                    for other_id in clustering.cluster_ids:
+                        if other_id == cluster_id:
+                            continue
+
+                        try:
+                            other_ch = ctrl.get_best_channels(other_id)
+                        except Exception:
+                            continue
+
+                        # Find common channels
+                        common_ch = np.intersect1d(target_ch, other_ch)
+                        if len(common_ch) == 0:
+                            similarities.append((other_id, 0.0))
+                            continue
+
+                        target_t = get_cluster_template_on_channels(
+                            cluster_id, common_ch
+                        )
+                        if target_t is None:
+                            continue
+
+                        other_t = get_cluster_template_on_channels(other_id, common_ch)
+                        if other_t is None:
+                            continue
+
+                        sim = float(np.sum(target_t * other_t))
+
+                        # No channel-overlap penalty applied here.
                         similarities.append((other_id, sim))
 
                     similarities.sort(key=lambda x: x[1], reverse=True)
@@ -191,9 +338,20 @@ class SpikeEditSimilarityPlugin(IPlugin):
 
                 def clear_numpy_cache():
                     cluster_template_cache.clear()
-                    custom_similarity.cache_clear()
+                    # clear both cached similarity variants if present
+                    try:
+                        custom_similarity_penalized.cache_clear()
+                    except Exception:
+                        pass
+                    try:
+                        custom_similarity_unpenalized.cache_clear()
+                    except Exception:
+                        pass
 
-                ctrl._numpy_similarity = custom_similarity
+                # Default: penalized similarity
+                ctrl._numpy_similarity = custom_similarity_penalized
+                # Expose an unpenalized variant as well
+                ctrl._numpy_similarity_unpenalized = custom_similarity_unpenalized
                 ctrl._clear_custom_similarity = clear_numpy_cache
                 logger.info("Successfully registered NumPy similarity action.")
                 return True
@@ -461,6 +619,73 @@ class SpikeEditSimilarityPlugin(IPlugin):
 
                     msg(
                         f"True waveform similarity computed for cluster {target_cluster_id}"
+                    )
+            
+            @supervisor.actions.add(shortcut="ctrl+alt+shift+n")
+            def recompute_numpy_similarity_unpenalized_now():
+                """Recompute NumPy similarity without channel-overlap penalty."""
+
+                def msg(text):
+                    logger.info("PLUGIN MSG: %s", text)
+                    if gui is not None:
+                        sm = getattr(gui, "status_message", None)
+                        if callable(sm):
+                            try:
+                                sm(text)
+                            except Exception:
+                                pass
+
+                try:
+                    msg("Computing true waveform similarity (no channel penalty)...")
+
+                    target_cluster_id = _pick_target_cluster()
+                    if target_cluster_id is None:
+                        msg("No target cluster selected.")
+                        return
+
+                    numpy_sim_func = getattr(controller, "_numpy_similarity_unpenalized", None)
+                    if not callable(numpy_sim_func):
+                        msg("Unpenalized NumPy similarity function not properly initialized.")
+                        return
+
+                    # Swap the similarity function temporarily on both the controller and the supervisor
+                    try:
+                        controller.similarity = numpy_sim_func
+                    except Exception as e:
+                        logger.warning("Could not set controller.similarity: %s", e)
+
+                    if controller.supervisor:
+                        try:
+                            controller.supervisor.similarity = numpy_sim_func
+                        except Exception as e:
+                            logger.warning("Could not set supervisor.similarity: %s", e)
+
+                    similarity_view = getattr(
+                        controller.supervisor, "similarity_view", None
+                    )
+
+                    if similarity_view is not None:
+                        similarity_view.reset([target_cluster_id])
+                        selected_clusters = list(
+                            getattr(controller.supervisor, "selected_clusters", [])
+                            or []
+                        )
+                        set_offset = getattr(
+                            similarity_view, "set_selected_index_offset", None
+                        )
+                        if callable(set_offset):
+                            set_offset(len(selected_clusters))
+
+                    msg(
+                        f"True waveform similarity (no penalty) computed for cluster {target_cluster_id}"
+                    )
+                except Exception as exc:
+                    import traceback
+
+                    msg(f"Fatal error in NumPy similarity (no penalty): {exc}")
+                    logger.error(
+                        "NumPy similarity (no penalty) refresh fatal error:\n%s",
+                        traceback.format_exc(),
                     )
                 except Exception as exc:
                     import traceback
