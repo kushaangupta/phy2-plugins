@@ -38,4 +38,5 @@ c.TemplateGUI.plugins = [
     'ChannelContextPlugin',
     'SwapClusterSimilarPlugin',
     'TemplateMatchSplit',
+    'PlaceFieldPlugin',
 ]
