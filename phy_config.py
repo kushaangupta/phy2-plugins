@@ -34,5 +34,6 @@ c.TemplateGUI.plugins = [
     'CleanInBatch',
     'colorSelectorPlugin',
     'IsolateSelectedSpike',
+    'RawWaveformMode',
     'ChannelContextPlugin',
 ]
