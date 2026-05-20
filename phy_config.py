@@ -36,4 +36,5 @@ c.TemplateGUI.plugins = [
     'IsolateSelectedSpike',
     'RawWaveformMode',
     'ChannelContextPlugin',
+    'SwapClusterSimilarPlugin',
 ]
