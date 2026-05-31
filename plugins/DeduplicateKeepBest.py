@@ -5,10 +5,17 @@ contain duplicate detections at nearly the same timestamp.
 
 Behavior
 --------
-For each selected cluster, spikes are grouped into conflict windows where
+If a single cluster is selected, its spikes are grouped into conflict windows where
 consecutive spikes are separated by <= interval_ms. Within each conflict group,
-the spike with the largest absolute amplitude is kept and all other spikes are
-split out into a separate cluster.
+the spike with the largest absolute amplitude is kept and the others are split out.
+
+If multiple clusters are selected (2 or more), spikes from ALL selected clusters
+are pooled together before looking for overlaps. This is useful for resolving
+double detections between different clusters (e.g., when Kilosort detects a large
+spike and then detects the residual in a different cluster). The highest amplitude
+spike in the overlap interval is kept in its original cluster, and all overlapping
+duplicate spikes across the selected clusters are extracted into a single new
+"junk" cluster, leaving the rest of the original clusters intact.
 
 Shortcut
 --------
@@ -26,8 +33,8 @@ Notes
    - Trigger: user-defined interval (default 0.5 ms).
    - Rule: within each conflict run, keep the spike with max ``|amplitude|`` and
      split out the others.
-   - Intended use: deduplication-style cleanup after merges that create
-     near-synchronous duplicate detections.
+   - Intended use: deduplication-style cleanup after merges, or resolving
+     double-detections across multiple distinct clusters.
 
 Practical guidance
 ------------------
@@ -68,13 +75,15 @@ class DeduplicateKeepBest(IPlugin):
             if supervisor is None:
                 return
 
-            @supervisor.actions.add(
-                shortcut="alt+shift+d", prompt=True, prompt_default=lambda: "0.5"
-            )
+            @supervisor.actions.add(shortcut="alt+shift+d", prompt=True, prompt_default=lambda: "0.5")
             def deduplicate_keep_best(interval_ms_str):
                 """Split near-coincident duplicates, keeping only the best-amplitude spike.
 
                 Enter interval in milliseconds (default: 0.5).
+
+                If multiple clusters are selected, deduplicates across all of them,
+                removing double-detections while preserving the highest-amplitude
+                spike in its original cluster.
 
                 Distinction from ``SplitShortISI``:
                 this action uses amplitude-ranked conflict resolution rather than
@@ -85,11 +94,7 @@ class DeduplicateKeepBest(IPlugin):
                     interval_ms = float(interval_ms_str)
                 except (TypeError, ValueError):
                     interval_ms = 0.5
-                    logger.warning(
-                        "Invalid interval '%s'. Falling back to %.3f ms.",
-                        interval_ms_str,
-                        interval_ms,
-                    )
+                    logger.warning("Invalid interval '%s'. Falling back to %.3f ms.", interval_ms_str, interval_ms)
 
                 if interval_ms <= 0:
                     logger.warning("Interval must be > 0 ms. Got %.6f ms.", interval_ms)
@@ -101,62 +106,66 @@ class DeduplicateKeepBest(IPlugin):
                     logger.warning("No cluster selected for deduplication.")
                     return
 
-                total_removed = 0
-                total_processed = 0
+                all_spike_ids = []
+                all_spike_times = []
+                all_amplitudes = []
 
                 for cluster_id in selected_clusters:
-                    spike_ids = np.asarray(
+                    s_ids = np.asarray(
                         supervisor.clustering.spikes_in_clusters([cluster_id]),
                         dtype=np.int64,
                     )
-                    if spike_ids.size < 2:
+                    if s_ids.size == 0:
                         continue
 
-                    spike_times = np.asarray(
-                        controller.model.spike_times[spike_ids], dtype=np.float64
-                    )
-                    amplitudes = self._get_spike_amplitudes(
-                        controller, cluster_id, spike_ids
-                    )
+                    s_times = np.asarray(controller.model.spike_times[s_ids], dtype=np.float64)
+                    s_amps = self._get_spike_amplitudes(controller, cluster_id, s_ids)
 
-                    order = np.argsort(spike_times, kind="mergesort")
-                    spike_ids_sorted = spike_ids[order]
-                    spike_times_sorted = spike_times[order]
-                    amplitudes_sorted = np.abs(amplitudes[order])
+                    all_spike_ids.append(s_ids)
+                    all_spike_times.append(s_times)
+                    all_amplitudes.append(s_amps)
 
-                    remove_mask_sorted = self._build_remove_mask(
-                        spike_times_sorted,
-                        amplitudes_sorted,
-                        interval_s,
-                    )
-                    n_remove = int(remove_mask_sorted.sum())
-                    if n_remove <= 0:
-                        logger.info(
-                            "Cluster %s: no duplicates found within %.3f ms.",
-                            cluster_id,
-                            interval_ms,
-                        )
-                        continue
+                if not all_spike_ids:
+                    return
 
-                    labels = np.ones(spike_ids_sorted.shape[0], dtype=np.int64)
-                    labels[remove_mask_sorted] = 2
+                spike_ids = np.concatenate(all_spike_ids)
+                spike_times = np.concatenate(all_spike_times)
+                amplitudes = np.concatenate(all_amplitudes)
 
-                    supervisor.actions.split(spike_ids_sorted, labels)
-                    total_removed += n_remove
-                    total_processed += 1
-                    logger.info(
-                        "Cluster %s: split out %d duplicate spikes (interval %.3f ms).",
-                        cluster_id,
-                        n_remove,
-                        interval_ms,
-                    )
+                if spike_ids.size < 2:
+                    logger.info("Not enough spikes for deduplication.")
+                    return
 
-                if total_processed == 0:
+                order = np.argsort(spike_times, kind="mergesort")
+                spike_ids_sorted = spike_ids[order]
+                spike_times_sorted = spike_times[order]
+                amplitudes_sorted = np.abs(amplitudes[order])
+
+                remove_mask_sorted = self._build_remove_mask(
+                    spike_times_sorted,
+                    amplitudes_sorted,
+                    interval_s,
+                )
+                
+                n_remove = int(remove_mask_sorted.sum())
+                if n_remove <= 0:
                     msg = f"No duplicates found within {interval_ms:.3f} ms"
-                else:
-                    msg = f"Deduplicated {total_removed} spikes across {total_processed} cluster(s)"
+                    logger.info(msg)
+                    status_message = getattr(gui, "status_message", None)
+                    if callable(status_message):
+                        try:
+                            status_message(msg)
+                        except Exception:
+                            pass
+                    return
 
+                duplicate_spike_ids = spike_ids_sorted[remove_mask_sorted]
+                supervisor.actions.split(duplicate_spike_ids)
+
+                msg = f"Deduplicated {n_remove} spikes across {len(selected_clusters)} cluster(s)"
+                logger.info("Split out %d duplicate spikes (interval %.3f ms).", n_remove, interval_ms)
                 logger.info(msg)
+                
                 status_message = getattr(gui, "status_message", None)
                 if callable(status_message):
                     try:
@@ -177,10 +186,7 @@ class DeduplicateKeepBest(IPlugin):
         i = 0
         while i < n_spikes:
             j = i + 1
-            while (
-                j < n_spikes
-                and (spike_times_sorted[j] - spike_times_sorted[j - 1]) <= interval_s
-            ):
+            while j < n_spikes and (spike_times_sorted[j] - spike_times_sorted[j - 1]) <= interval_s:
                 j += 1
 
             if (j - i) > 1:
@@ -194,9 +200,7 @@ class DeduplicateKeepBest(IPlugin):
         return remove_mask
 
     @staticmethod
-    def _get_spike_amplitudes(
-        controller, cluster_id: int, spike_ids: np.ndarray
-    ) -> np.ndarray:
+    def _get_spike_amplitudes(controller, cluster_id: int, spike_ids: np.ndarray) -> np.ndarray:
         """Best-effort spike amplitudes aligned to spike_ids; defaults to ones."""
         model = getattr(controller, "model", None)
         if model is not None:
@@ -210,9 +214,7 @@ class DeduplicateKeepBest(IPlugin):
                     pass
 
         try:
-            bunches = controller._amplitude_getter(
-                [cluster_id], name="template", load_all=True
-            )
+            bunches = controller._amplitude_getter([cluster_id], name="template", load_all=True)
             if bunches:
                 bunch = bunches[0]
                 b_ids = np.asarray(getattr(bunch, "spike_ids", []), dtype=np.int64)
