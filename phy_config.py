@@ -44,4 +44,5 @@ c.TemplateGUI.plugins = [
     'IsolationForestSplit',               # Isolation Forest outlier detection (Shift+O)
     'FeatureSpaceSplit',                  # MeanShift (Alt+N) and GMM (Alt+Shift+F) on channel PCs
     'AmplitudeHistogramPlugin',           # Missing-spike estimate from template-amplitude distributions
+    'AutoSavePlugin',                     # Debounced save after merges, splits, labels, undo, and redo
 ]

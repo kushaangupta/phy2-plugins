@@ -9,6 +9,7 @@ These plugins add additional features to Phy2. Originally created for Phy1 by Pe
 * **ReclusterUMAP** (`alt+k`): Modern reclustering using UMAP and template matching
 * **GoodLabelsPlugin**: Improved cluster organization that sorts by quality (good > mua > noise). Provides better workflow organization despite Phy's real-time update limitations.
 * **AmplitudeHistogramPlugin**: Adds an amplitude-completeness diagnostic. Open `View > New view > AmplitudeHistogramView` to inspect full template-amplitude distributions and the estimated fraction of spikes missed below the detection threshold.
+* **AutoSavePlugin**: Saves curation changes after five seconds without another edit, coalescing batch labels, merges, and splits into a single disk write.
 
 ### Legacy Features
 * **Reclustering** (`alt+shift+k`, `alt+shift+t`): KlustaKwik 2.0 based reclustering
@@ -49,11 +50,26 @@ stationary, roughly symmetric amplitude distribution; electrode drift,
 multimodal clusters, and waveform changes can invalidate that assumption. It
 also measures estimated missed detections, not contamination from other units.
 
+## Autosave behavior
+
+`AutoSavePlugin` protects in-memory curation work by saving five seconds after
+the last merge, split, group assignment, custom label, undo, or redo. The delay
+means batch tools such as `AutoQuality` generate one save after the batch rather
+than rewriting the dataset once per cluster. Saving uses Phy's normal path, so
+it updates `spike_clusters.npy`, `cluster_group.tsv`, other cluster-label TSVs,
+and `cluster_info.tsv`.
+
+Autosave is not backup rotation: these files are overwritten with the current
+state. Keep an untouched copy of sorter output before curation, and use dated
+snapshots or version control for recovery across sessions. Ctrl+S and Phy's
+close prompt continue to work normally.
+
 ## Authors
 - Original Phy1: Peter Petersen
 - Phy2 compatibility: Thomas Hainmueller
 - New implementations: Mingze Dou
 - Original amplitude-histogram concept: Luke Shaheen
+- Original autosave concept: Luke Shaheen
 
 ## How to Cite
 [![DOI](https://zenodo.org/badge/126424002.svg)](https://zenodo.org/badge/latestdoi/126424002)
