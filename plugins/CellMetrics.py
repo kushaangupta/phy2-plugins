@@ -13,6 +13,8 @@ All functions are optimized for multi-core CPUs and can be imported by any plugi
 import numpy as np
 import logging
 
+from amplitude_metrics import compute_amplitude_cutoff
+
 logger = logging.getLogger('phy')
 
 # Try to import Numba for JIT compilation
@@ -22,7 +24,7 @@ try:
     logger.info("CellMetrics: Numba JIT compilation available")
 except ImportError:
     NUMBA_AVAILABLE = False
-    logger.warn("CellMetrics: Numba not available, using NumPy fallback (slower)")
+    logger.warning("CellMetrics: Numba not available, using NumPy fallback (slower)")
     # Fallback decorator that does nothing
     def jit(*args, **kwargs):
         def decorator(func):
@@ -274,61 +276,6 @@ def count_isi_violations(spike_times, isi_threshold=0.0015, min_isi=0.0):
                 violations += 1
     
     return violations, float(violations) / float(len(spike_times))
-
-
-# ========== AMPLITUDE ANALYSIS ==========
-
-@jit(nopython=True, fastmath=True, cache=True)
-def compute_amplitude_cutoff(spike_amps, num_bins=100):
-    """
-    Estimate amplitude cutoff using histogram method.
-    
-    Estimates the fraction of missing spikes based on amplitude distribution.
-    
-    Parameters
-    ----------
-    spike_amps : ndarray
-        Spike amplitudes (float64)
-    num_bins : int
-        Number of histogram bins
-    
-    Returns
-    -------
-    cutoff : float
-        Estimated fraction of missing spikes (0-1)
-    """
-    if len(spike_amps) < 10:
-        return 0.0
-    
-    # Create histogram
-    min_amp = np.min(spike_amps)
-    max_amp = np.max(spike_amps)
-    bin_width = (max_amp - min_amp) / num_bins
-    
-    hist = np.zeros(num_bins)
-    for amp in spike_amps:
-        bin_idx = int((amp - min_amp) / bin_width)
-        if bin_idx >= num_bins:
-            bin_idx = num_bins - 1
-        hist[bin_idx] += 1
-    
-    # Find peak
-    peak_idx = 0
-    peak_val = hist[0]
-    for i in range(num_bins):
-        if hist[i] > peak_val:
-            peak_val = hist[i]
-            peak_idx = i
-    
-    # Count missing spikes (bins before peak)
-    missing = 0.0
-    for i in range(peak_idx):
-        missing += (peak_val - hist[i])
-    
-    total = float(len(spike_amps))
-    cutoff = missing / (total + missing) if (total + missing) > 0 else 0.0
-    
-    return min(cutoff, 1.0)
 
 
 # ========== HELPER FUNCTIONS FOR PLUGIN USE ==========

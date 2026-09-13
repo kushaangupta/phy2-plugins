@@ -43,4 +43,5 @@ c.TemplateGUI.plugins = [
     'NoisyPeriodSpikes',                  # Isolate spikes in noisy time windows (Alt+Q single / Alt+Shift+Q all clusters)
     'IsolationForestSplit',               # Isolation Forest outlier detection (Shift+O)
     'FeatureSpaceSplit',                  # MeanShift (Alt+N) and GMM (Alt+Shift+F) on channel PCs
+    'AmplitudeHistogramPlugin',           # Missing-spike estimate from template-amplitude distributions
 ]

@@ -29,9 +29,8 @@ plugins_dir = Path(__file__).parent
 if str(plugins_dir) not in sys.path:
     sys.path.insert(0, str(plugins_dir))
 
-# Import optimized cell metrics
-import CellMetrics
-from CellMetrics import analyze_cluster_quality, count_isi_violations, compute_amplitude_cutoff
+# Import the shared high-level quality analysis.
+from CellMetrics import analyze_cluster_quality
 
 logger = logging.getLogger('phy')
 
