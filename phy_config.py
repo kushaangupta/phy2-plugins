@@ -39,4 +39,8 @@ c.TemplateGUI.plugins = [
     'SwapClusterSimilarPlugin',
     'TemplateMatchSplit',
     'PlaceFieldPlugin',
+    'RawDataFilterPluginMeanAndHighpass',  # High-pass + CAR/CMR multi-stage raw data filters (Alt+R in Trace/Waveform view)
+    'NoisyPeriodSpikes',                  # Isolate spikes in noisy time windows (Alt+Q single / Alt+Shift+Q all clusters)
+    'IsolationForestSplit',               # Isolation Forest outlier detection (Shift+O)
+    'FeatureSpaceSplit',                  # MeanShift (Alt+N) and GMM (Alt+Shift+F) on channel PCs
 ]
